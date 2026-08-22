@@ -1,0 +1,20 @@
+# Secrets and local state
+.env
+.env.*
+*.local
+
+# Logs
+*.log
+
+# Editor / OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Build artifacts
+node_modules/
+dist/
+build/
+__pycache__/
+*.egg-info/
