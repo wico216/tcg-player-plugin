@@ -9,6 +9,7 @@ import qs.Ui
 // TCGplayer market price (served by the free Scryfall API).
 BarWidget {
   id: root
+  moduleName: "wico216.tcg-player"
 
   property var results: []
   property bool searching: false
@@ -179,7 +180,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: root.moduleName
+    target: "wico216.tcg-player"
 
     function open(): void { root.open() }
     function show(): void { root.open() }
@@ -399,7 +400,7 @@ BarWidget {
             required property var modelData
 
             width: panelColumn.width
-            height: Math.max(thumb.height, rowText.implicitHeight) + Style.space(12)
+            height: Math.max(Style.space(50), rowText.implicitHeight) + Style.space(12)
             radius: Style.cornerRadius
             color: root.selectedCard && root.selectedCard.id === modelData.id
               ? Style.selectedFillFor(root.fgColor, Color.accent) : "transparent"
@@ -431,6 +432,7 @@ BarWidget {
               }
 
               Column {
+                id: rowText
                 width: parent.width - Style.space(44)
                 spacing: Style.space(1)
                 anchors.verticalCenter: parent.verticalCenter

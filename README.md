@@ -28,9 +28,13 @@ Files under `~/.config/omarchy/plugins/` hot-reload on save. If a change fails t
 omarchy-shell shell rescanPlugins
 ```
 
+> Note: if you install this as a **symlink** to a git checkout (as developed), the
+> hot-reload watcher may miss edits through the link — use `omarchy restart shell`
+> to force a fresh load.
+
 ## Use
 
-- Click the 🔍 icon in the bar (or `omarchy-shell shell summon wico216.tcg-player open`)
+- Click the 🔍 icon in the bar (or `omarchy-shell shell wico216.tcg-player open`)
 - Type at least 2 characters; results debounce in as you type
 - Click a version row to select it
 - Toggle **Non-foil / Foil** to switch which TCGplayer price is shown
