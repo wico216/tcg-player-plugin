@@ -19,10 +19,12 @@ BarWidget {
   property string selectedFinish: "nonfoil"
   property int totalCards: 0
   property string pendingQuery: ""
+  property var searchCache: ({})
 
   readonly property color fgColor: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   readonly property int resultCount: results ? results.length : 0
+  readonly property var visibleResults: root.results ? root.results.slice(0, 40) : []
 
   function requestSearch() {
     var query = searchField.text.trim()
@@ -31,6 +33,14 @@ BarWidget {
       root.totalCards = 0
       root.errorText = ""
       root.searching = false
+      return
+    }
+    var key = query.toLowerCase()
+    if (root.searchCache[key]) {
+      root.pendingQuery = query
+      root.searching = false
+      root.errorText = ""
+      root.applySearch(root.searchCache[key])
       return
     }
     root.pendingQuery = query
@@ -44,7 +54,7 @@ BarWidget {
     searchProc.activeQuery = root.pendingQuery
     var url = "https://api.scryfall.com/cards/search?unique=prints&order=name&dir=asc&q="
       + encodeURIComponent(root.pendingQuery)
-    searchProc.command = ["curl", "-sS", "--max-time", "8",
+    searchProc.command = ["curl", "-sS", "--compressed", "--max-time", "8",
       "-A", "wico216-tcg-player-plugin/0.1 (omarchy shell plugin)", url]
     searchProc.running = true
   }
@@ -60,6 +70,11 @@ BarWidget {
     root.totalCards = Number(payload.total_cards || 0)
     var cards = Array.isArray(payload.data) ? payload.data : []
     root.results = cards
+    var key = String(root.pendingQuery || "").toLowerCase()
+    if (key !== "") {
+      if (Object.keys(root.searchCache).length > 60) root.searchCache = {}
+      root.searchCache[key] = payload
+    }
     if (root.selectedCard) root.syncSelection()
   }
 
@@ -133,36 +148,28 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onPopupOpenChanged: {
-    if (popupOpen) {
-      // The popup realizes content a frame after opening; defer and retry
-      // until the field truly owns focus so typing works immediately.
-      Qt.callLater(focusSearchField)
-      focusRetry.restart()
-    } else {
-      focusRetry.stop()
-    }
-  }
+  onPopupOpenChanged: if (popupOpen) Qt.callLater(focusSearchField)
 
   function focusSearchField() {
-    if (root.popupOpen && !searchField.activeFocus) searchField.forceActiveFocus()
+    if (root.popupOpen) searchField.forceActiveFocus()
   }
 
   Timer {
     id: searchDebounce
-    interval: 350
+    interval: 250
     repeat: false
     onTriggered: root.requestSearch()
   }
 
+  // Persistent focus guard: whatever steals focus while the pane is open
+  // (popup realization, animation ticks) gets corrected on the next pass,
+  // so typing works immediately without clicking the field first.
   Timer {
-    id: focusRetry
-    interval: 120
+    id: focusGuard
+    interval: 250
     repeat: true
-    onTriggered: {
-      if (!root.popupOpen || searchField.activeFocus) stop()
-      else searchField.forceActiveFocus()
-    }
+    running: root.popupOpen
+    onTriggered: if (!searchField.activeFocus) searchField.forceActiveFocus()
   }
 
   Process {
@@ -247,7 +254,7 @@ BarWidget {
     owner: root
     open: root.popupOpen
     triggerMode: "click"
-    contentWidth: popup.fittedContentWidth(Style.space(470))
+    contentWidth: popup.fittedContentWidth(Style.space(510))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight, Style.space(640))
 
     PanelKeyCatcher {
@@ -320,15 +327,15 @@ BarWidget {
           spacing: Style.space(10)
 
           Rectangle {
-            width: Style.space(96)
-            height: Style.space(134)
+            width: Style.space(150)
+            height: Style.space(210)
             radius: Style.cornerRadius
             color: Qt.darker(root.fgColor, 2.5)
 
             Image {
               anchors.centerIn: parent
-              width: parent.width - Style.space(8)
-              height: parent.height - Style.space(8)
+              width: parent.width - Style.space(6)
+              height: parent.height - Style.space(6)
               asynchronous: true
               fillMode: Image.PreserveAspectFit
               source: root.artFor(root.selectedCard)
@@ -337,7 +344,7 @@ BarWidget {
           }
 
           Column {
-            width: parent.width - Style.space(106)
+            width: parent.width - Style.space(160)
             spacing: Style.space(4)
 
             Text {
@@ -414,9 +421,9 @@ BarWidget {
 
         Text {
           visible: root.totalCards > 0
-          text: root.totalCards > root.resultCount
-            ? "Versions — " + root.resultCount + " shown of " + root.totalCards
-            : "Versions — " + root.resultCount
+          text: root.totalCards > root.visibleResults.length
+            ? "Versions — " + root.visibleResults.length + " of " + root.totalCards + " (keep typing to narrow)"
+            : "Versions — " + root.visibleResults.length
           color: root.fgColor
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -424,7 +431,7 @@ BarWidget {
         }
 
         Repeater {
-          model: root.results
+          model: root.visibleResults
 
           BorderSurface {
             id: resultRow
