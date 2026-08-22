@@ -133,13 +133,36 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onPopupOpenChanged: if (popupOpen) searchField.forceActiveFocus()
+  onPopupOpenChanged: {
+    if (popupOpen) {
+      // The popup realizes content a frame after opening; defer and retry
+      // until the field truly owns focus so typing works immediately.
+      Qt.callLater(focusSearchField)
+      focusRetry.restart()
+    } else {
+      focusRetry.stop()
+    }
+  }
+
+  function focusSearchField() {
+    if (root.popupOpen && !searchField.activeFocus) searchField.forceActiveFocus()
+  }
 
   Timer {
     id: searchDebounce
     interval: 350
     repeat: false
     onTriggered: root.requestSearch()
+  }
+
+  Timer {
+    id: focusRetry
+    interval: 120
+    repeat: true
+    onTriggered: {
+      if (!root.popupOpen || searchField.activeFocus) stop()
+      else searchField.forceActiveFocus()
+    }
   }
 
   Process {
@@ -227,7 +250,15 @@ BarWidget {
     contentWidth: popup.fittedContentWidth(Style.space(470))
     contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight, Style.space(640))
 
-    Flickable {
+    PanelKeyCatcher {
+      id: keyCatcher
+      anchors.fill: parent
+      // While the search field owns focus, hand ALL keys straight to it;
+      // otherwise the catcher drives Esc/arrows for the panel itself.
+      blocked: searchField.activeFocus
+      onCloseRequested: root.close()
+
+      Flickable {
       id: panelScroll
       anchors.fill: parent
       contentWidth: width
@@ -474,6 +505,7 @@ BarWidget {
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
         }
+      }
       }
     }
   }
