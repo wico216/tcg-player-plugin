@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "wico216.tcg-player",
   "name": "TCG Player Search",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "author": "wico216",
   "description": "Search Magic: The Gathering printings and check TCGplayer prices from the bar.",
   "kinds": ["bar-widget"],
@@ -12,7 +12,7 @@
   },
   "barWidget": {
     "displayName": "TCG Player search",
-    "description": "Search MTG versions, pick foil or non-foil, see TCGplayer market prices.",
+    "description": "Browse MTG printings, sort daily price snapshots, and open live TCGplayer listings.",
     "category": "Tools",
     "aliases": ["mtg", "magic", "cards", "scryfall"],
     "allowMultiple": false

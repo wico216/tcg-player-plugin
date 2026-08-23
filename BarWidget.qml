@@ -3,10 +3,10 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
+import "CardModel.js" as CardModel
 
-// MTG card search bar widget. Type a card name, get every printing
-// (photo, set, collector number), pick foil or non-foil, and read the
-// TCGplayer market price (served by the free Scryfall API).
+// Search Magic printings, compare Scryfall's daily TCGplayer snapshots,
+// then jump to the live TCGplayer product page for the current marketplace.
 BarWidget {
   id: root
   moduleName: "wico216.tcg-player"
@@ -15,19 +15,22 @@ BarWidget {
   property bool searching: false
   property string errorText: ""
   property bool popupOpen: false
-  property var selectedCard: null
-  property string selectedFinish: "nonfoil"
   property int totalCards: 0
   property string pendingQuery: ""
   property var searchCache: ({})
+  property string sortMode: "high"
+  property bool popoutSwitchClosing: false
 
   readonly property color fgColor: root.bar ? root.bar.foreground : Color.foreground
   readonly property string fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   readonly property int resultCount: results ? results.length : 0
-  readonly property var visibleResults: root.results ? root.results.slice(0, 40) : []
+  readonly property var sortedResults: CardModel.sortCards(root.results || [], root.sortMode)
+  readonly property var visibleResults: root.sortedResults.slice(0, 40)
+  readonly property bool opened: root.popupOpen
 
   function requestSearch() {
     var query = searchField.text.trim()
+    root.pendingQuery = query
     if (query.length < 2) {
       root.results = []
       root.totalCards = 0
@@ -35,77 +38,55 @@ BarWidget {
       root.searching = false
       return
     }
-    var key = query.toLowerCase()
+
+    var key = CardModel.queryKey(query)
     if (root.searchCache[key]) {
-      root.pendingQuery = query
       root.searching = false
       root.errorText = ""
-      root.applySearch(root.searchCache[key])
+      root.applySearch(root.searchCache[key], query)
       return
     }
-    root.pendingQuery = query
+
     root.searching = true
-    if (!searchProc.running) startSearch()
+    if (!searchProc.running) root.startSearch()
   }
 
-  // Only one curl runs at a time; if the query moved on while a fetch was in
-  // flight, the latest query is fetched right after (same pattern as weather).
+  // Serialize requests so fast typing never floods Scryfall. If the query
+  // changes during a request, only the newest pending query runs next.
   function startSearch() {
+    if (String(root.pendingQuery || "").trim().length < 2) {
+      root.searching = false
+      return
+    }
     searchProc.activeQuery = root.pendingQuery
-    var url = "https://api.scryfall.com/cards/search?unique=prints&order=name&dir=asc&q="
-      + encodeURIComponent(root.pendingQuery)
-    searchProc.command = ["curl", "-sS", "--compressed", "--max-time", "8",
-      "-A", "wico216-tcg-player-plugin/0.1 (omarchy shell plugin)", url]
+    searchProc.command = CardModel.scryfallSearchCommand(root.pendingQuery)
     searchProc.running = true
   }
 
-  function applySearch(payload) {
+  function applySearch(payload, requestQuery) {
+    var plan = CardModel.searchResponsePlan(requestQuery, root.pendingQuery, searchField.text)
     if (!payload || payload.object === "error") {
+      if (!plan.apply) return
       root.results = []
       root.totalCards = 0
       root.errorText = payload && payload.details ? payload.details : "Search failed"
       return
     }
-    root.errorText = ""
-    root.totalCards = Number(payload.total_cards || 0)
-    var cards = Array.isArray(payload.data) ? payload.data : []
-    root.results = cards
-    var key = String(root.pendingQuery || "").toLowerCase()
-    if (key !== "") {
+
+    if (plan.cacheKey !== "") {
       if (Object.keys(root.searchCache).length > 60) root.searchCache = {}
-      root.searchCache[key] = payload
+      root.searchCache[plan.cacheKey] = payload
     }
-    if (root.selectedCard) root.syncSelection()
-  }
+    if (!plan.apply) return
 
-  function syncSelection() {
-    for (var i = 0; i < root.results.length; i++) {
-      if (root.results[i].id === root.selectedCard.id) {
-        root.selectedCard = root.results[i]
-        return
-      }
-    }
-    root.selectCard(null)
-  }
-
-  function selectCard(card) {
-    root.selectedCard = card
-    if (!card) return
-    var finishes = card.finishes || []
-    root.selectedFinish = finishes.indexOf("nonfoil") >= 0 ? "nonfoil" : "foil"
-  }
-
-  function hasFinish(card, finish) {
-    return card && card.finishes && card.finishes.indexOf(finish) >= 0
-  }
-
-  function priceFor(card, finish) {
-    if (!card || !card.prices) return null
-    return finish === "foil" ? card.prices.usd_foil : card.prices.usd
+    root.errorText = ""
+    root.results = CardModel.filterCardsByName(payload.data, requestQuery)
+    root.totalCards = root.results.length
+    Qt.callLater(root.resetResultsViewport)
   }
 
   function formatPrice(value) {
-    return value === null || value === undefined ? "—" : "$" + value
+    return value === null || value === undefined || value === "" ? "—" : "$" + value
   }
 
   function thumbFor(card) {
@@ -116,60 +97,64 @@ BarWidget {
     return ""
   }
 
-  function artFor(card) {
-    if (!card) return ""
-    if (card.image_uris && card.image_uris.normal) return card.image_uris.normal
-    if (card.card_faces && card.card_faces.length > 0
-        && card.card_faces[0].image_uris) return card.card_faces[0].image_uris.normal || ""
-    return ""
+  function tcgplayerUri(card) {
+    return card && card.purchase_uris && card.purchase_uris.tcgplayer
+      ? String(card.purchase_uris.tcgplayer) : ""
   }
 
-  function setLabel(card) {
-    if (!card) return ""
-    var setPart = String(card.set_name || "") + " [" + String(card.set || "").toUpperCase() + "]"
-    return setPart + " #" + String(card.collector_number || "?")
-  }
-
-  function openTcgplayer() {
-    if (!root.selectedCard) return
-    var uri = root.selectedCard.purchase_uris && root.selectedCard.purchase_uris.tcgplayer
-      ? root.selectedCard.purchase_uris.tcgplayer : ""
-    if (uri === "") return
+  function openTcgplayer(card) {
+    var uri = root.tcgplayerUri(card)
+    if (uri === "" || openProc.running) return
     openProc.command = ["xdg-open", uri]
     openProc.running = true
   }
 
-  function open() { root.popupOpen = true }
+  function open() {
+    root.popupOpen = true
+    Qt.callLater(root.resetResultsViewport)
+  }
 
-  function close() { root.popupOpen = false }
+  function close() {
+    root.popupOpen = false
+    root.clearSearchSession()
+  }
 
-  function togglePanel() { root.popupOpen = !root.popupOpen }
+  function togglePanel() {
+    if (root.popupOpen) root.close()
+    else root.open()
+  }
+
+  function closeForPopoutSwitch() {
+    root.popoutSwitchClosing = true
+    root.close()
+    Qt.callLater(function() { root.popoutSwitchClosing = false })
+  }
+
+  function resetResultsViewport() {
+    panelScroll.contentY = 0
+  }
+
+  function clearSearchSession() {
+    searchField.text = ""
+    searchDebounce.stop()
+    root.pendingQuery = ""
+    root.results = []
+    root.totalCards = 0
+    root.errorText = ""
+    root.searching = false
+    root.resetResultsViewport()
+  }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onPopupOpenChanged: if (popupOpen) Qt.callLater(focusSearchField)
-
-  function focusSearchField() {
-    if (root.popupOpen) searchField.forceActiveFocus()
-  }
+  onSortModeChanged: Qt.callLater(root.resetResultsViewport)
 
   Timer {
     id: searchDebounce
     interval: 250
     repeat: false
     onTriggered: root.requestSearch()
-  }
-
-  // Persistent focus guard: whatever steals focus while the pane is open
-  // (popup realization, animation ticks) gets corrected on the next pass,
-  // so typing works immediately without clicking the field first.
-  Timer {
-    id: focusGuard
-    interval: 250
-    repeat: true
-    running: root.popupOpen
-    onTriggered: if (!searchField.activeFocus) searchField.forceActiveFocus()
   }
 
   Process {
@@ -180,28 +165,31 @@ BarWidget {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        var plan = CardModel.searchResponsePlan(searchProc.activeQuery, root.pendingQuery, searchField.text)
         try {
-          root.applySearch(JSON.parse(String(text || "{}")))
+          root.applySearch(JSON.parse(String(text || "{}")), searchProc.activeQuery)
         } catch (error) {
-          root.results = []
-          root.totalCards = 0
-          root.errorText = "Could not reach Scryfall"
+          root.applySearch({ object: "error", details: "Could not reach Scryfall" }, searchProc.activeQuery)
         }
-        if (String(searchProc.activeQuery) !== String(root.pendingQuery)) startSearchTimer.restart()
+        if (plan.fetchPending) startSearchTimer.restart()
         else root.searching = false
       }
     }
 
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (text.trim() !== "" && root.resultCount === 0) root.errorText = "Scryfall unreachable"
+      onStreamFinished: {
+        var plan = CardModel.searchResponsePlan(searchProc.activeQuery, root.pendingQuery, searchField.text)
+        if (text.trim() !== "" && plan.apply && root.resultCount === 0)
+          root.errorText = "Scryfall unreachable"
+      }
     }
   }
 
   Timer {
     id: startSearchTimer
     interval: 1
-    onTriggered: root.startSearch()
+    onTriggered: root.requestSearch()
   }
 
   Process {
@@ -217,6 +205,7 @@ BarWidget {
     function close(): void { root.close() }
     function hide(): void { root.close() }
     function toggle(): void { root.togglePanel() }
+    function query(): string { return searchField.text }
     function search(query: string): string {
       searchField.text = String(query)
       root.open()
@@ -225,294 +214,279 @@ BarWidget {
     }
   }
 
-  Item {
+  BarIconButton {
     id: button
     anchors.fill: parent
-    implicitWidth: Style.bar.statusSlot
-    implicitHeight: root.barSize
+    bar: root.bar
+    text: CardModel.barIcon()
+    slotSize: Style.bar.statusSlot
+    tooltipText: "Search Magic cards"
 
-    Text {
-      anchors.centerIn: parent
-      text: ""
-      color: root.fgColor
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.icon
-    }
-
-    MouseArea {
-      anchors.fill: parent
-      acceptedButtons: Qt.LeftButton
-      hoverEnabled: false
-      onClicked: root.togglePanel()
+    onPressed: function(mouseButton) {
+      if (mouseButton === Qt.LeftButton) root.togglePanel()
     }
   }
 
-  PopupCard {
+  KeyboardPanel {
     id: popup
     anchorItem: button
     bar: root.bar
     owner: root
     open: root.popupOpen
-    triggerMode: "click"
-    contentWidth: popup.fittedContentWidth(Style.space(510))
-    contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight, Style.space(640))
+    focusTarget: searchField
+    contentWidth: popup.fittedContentWidth(Style.space(600))
+    contentHeight: popup.fittedContentHeight(panelColumn.implicitHeight, Style.space(680))
 
     PanelKeyCatcher {
-      id: keyCatcher
       anchors.fill: parent
-      // While the search field owns focus, hand ALL keys straight to it;
-      // otherwise the catcher drives Esc/arrows for the panel itself.
       blocked: searchField.activeFocus
       onCloseRequested: root.close()
 
       Flickable {
-      id: panelScroll
-      anchors.fill: parent
-      contentWidth: width
-      contentHeight: panelColumn.implicitHeight
-      clip: true
-      boundsBehavior: Flickable.StopAtBounds
+        id: panelScroll
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: panelColumn.implicitHeight
+        clip: true
+        boundsBehavior: Flickable.StopAtBounds
 
-      Column {
-        id: panelColumn
-        width: panelScroll.width
-        spacing: Style.space(8)
+        WheelHandler {
+          target: null
+          orientation: Qt.Vertical
+          acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+          blocking: true
 
-        TextField {
-          id: searchField
-          width: parent.width
-          placeholderText: "Search Magic cards… (e.g. one ring)"
-          foreground: root.fgColor
-          font.family: root.fontFamily
-
-          onTextChanged: {
-            root.errorText = ""
-            searchDebounce.restart()
+          onWheel: function(event) {
+            var delta = CardModel.scaledScrollDelta(event.pixelDelta.y, event.angleDelta.y)
+            if (delta === 0) return
+            panelScroll.contentY = CardModel.nextScrollPosition(
+              panelScroll.contentY,
+              event.pixelDelta.y,
+              event.angleDelta.y,
+              panelScroll.contentHeight,
+              panelScroll.height
+            )
+            event.accepted = true
           }
+        }
 
-          Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Escape) {
-              root.close()
-              event.accepted = true
-            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-              searchDebounce.stop()
-              root.requestSearch()
-              event.accepted = true
+        Column {
+          id: panelColumn
+          width: panelScroll.width
+          spacing: Style.space(8)
+
+          TextField {
+            id: searchField
+            width: parent.width
+            placeholderText: "Search Magic cards… (e.g. one ring)"
+            foreground: root.fgColor
+            font.family: root.fontFamily
+
+            onTextChanged: {
+              root.pendingQuery = text.trim()
+              root.errorText = ""
+              searchDebounce.restart()
             }
-          }
-        }
 
-        Text {
-          visible: root.searching
-          text: "Searching Scryfall…"
-          color: Qt.darker(root.fgColor, 1.3)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-        }
-
-        Text {
-          visible: !root.searching && root.errorText !== ""
-          text: root.errorText
-          color: Qt.darker(root.fgColor, 1.3)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.WordWrap
-          width: parent.width
-        }
-
-        // Selected version detail: photo, finish picker, TCGplayer price.
-        Row {
-          visible: root.selectedCard !== null
-          width: parent.width
-          spacing: Style.space(10)
-
-          Rectangle {
-            width: Style.space(150)
-            height: Style.space(210)
-            radius: Style.cornerRadius
-            color: Qt.darker(root.fgColor, 2.5)
-
-            Image {
-              anchors.centerIn: parent
-              width: parent.width - Style.space(6)
-              height: parent.height - Style.space(6)
-              asynchronous: true
-              fillMode: Image.PreserveAspectFit
-              source: root.artFor(root.selectedCard)
-              visible: status === Image.Ready
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                root.close()
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                searchDebounce.stop()
+                root.requestSearch()
+                event.accepted = true
+              }
             }
           }
 
-          Column {
-            width: parent.width - Style.space(160)
-            spacing: Style.space(4)
+          Row {
+            width: parent.width
+            spacing: Style.space(5)
 
             Text {
-              width: parent.width
-              text: root.selectedCard ? String(root.selectedCard.name) : ""
+              text: "Sort"
               color: root.fgColor
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
-              font.bold: true
-              elide: Text.ElideRight
-            }
-
-            Text {
-              width: parent.width
-              text: root.setLabel(root.selectedCard)
-                + (root.selectedCard && root.selectedCard.rarity
-                   ? " · " + String(root.selectedCard.rarity) : "")
-              color: Qt.darker(root.fgColor, 1.3)
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-            }
-
-            Row {
-              spacing: Style.space(6)
-
-              Button {
-                text: "Non-foil"
-                leftAlign: false
-                bordered: root.selectedFinish === "nonfoil"
-                foreground: root.hasFinish(root.selectedCard, "nonfoil") ? root.fgColor : Qt.darker(root.fgColor, 2.0)
-                enabled: root.hasFinish(root.selectedCard, "nonfoil")
-                opacity: enabled ? 1.0 : 0.5
-                onClicked: root.selectedFinish = "nonfoil"
-              }
-
-              Button {
-                text: "Foil"
-                leftAlign: false
-                bordered: root.selectedFinish === "foil"
-                foreground: root.hasFinish(root.selectedCard, "foil") ? root.fgColor : Qt.darker(root.fgColor, 2.0)
-                enabled: root.hasFinish(root.selectedCard, "foil")
-                opacity: enabled ? 1.0 : 0.5
-                onClicked: root.selectedFinish = "foil"
-              }
-            }
-
-            Text {
-              text: root.selectedCard
-                ? formatPrice(priceFor(root.selectedCard, root.selectedFinish))
-                  + " · TCGplayer market (" + (root.selectedFinish === "foil" ? "foil" : "non-foil") + ")"
-                : ""
-              color: root.fgColor
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.subtitle
               font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
             }
 
             Button {
-              text: "Open on TCGplayer"
-              iconText: "󰍃"
-              leftAlign: true
-              bordered: true
+              text: "Highest price"
+              leftAlign: false
+              bordered: root.sortMode === "high"
               foreground: root.fgColor
-              onClicked: root.openTcgplayer()
+              onClicked: root.sortMode = "high"
+            }
+
+            Button {
+              text: "Lowest price"
+              leftAlign: false
+              bordered: root.sortMode === "low"
+              foreground: root.fgColor
+              onClicked: root.sortMode = "low"
+            }
+
+            Button {
+              text: "Newest"
+              leftAlign: false
+              bordered: root.sortMode === "newest"
+              foreground: root.fgColor
+              onClicked: root.sortMode = "newest"
+            }
+
+            Button {
+              text: "Name"
+              leftAlign: false
+              bordered: root.sortMode === "name"
+              foreground: root.fgColor
+              onClicked: root.sortMode = "name"
             }
           }
-        }
 
-        PanelSeparator {
-          visible: root.resultCount > 0
-          foreground: root.fgColor
-        }
+          Text {
+            visible: root.searching
+            text: "Searching Scryfall…"
+            color: Qt.darker(root.fgColor, 1.3)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
 
-        Text {
-          visible: root.totalCards > 0
-          text: root.totalCards > root.visibleResults.length
-            ? "Versions — " + root.visibleResults.length + " of " + root.totalCards + " (keep typing to narrow)"
-            : "Versions — " + root.visibleResults.length
-          color: root.fgColor
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-        }
+          Text {
+            visible: !root.searching && root.errorText !== ""
+            text: root.errorText
+            color: Qt.darker(root.fgColor, 1.3)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+            width: parent.width
+          }
 
-        Repeater {
-          model: root.visibleResults
+          Text {
+            visible: root.totalCards > 0
+            text: root.totalCards > root.visibleResults.length
+              ? root.visibleResults.length + " of " + root.totalCards + " printings · narrow the search for more"
+              : root.visibleResults.length + (root.visibleResults.length === 1 ? " printing" : " printings")
+            color: root.fgColor
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
 
-          BorderSurface {
-            id: resultRow
-            required property var modelData
+          Grid {
+            id: resultsGrid
+            width: parent.width
+            columns: 2
+            columnSpacing: Style.space(8)
+            rowSpacing: Style.space(8)
+            height: childrenRect.height
 
-            width: panelColumn.width
-            height: Math.max(Style.space(50), rowText.implicitHeight) + Style.space(12)
-            radius: Style.cornerRadius
-            color: root.selectedCard && root.selectedCard.id === modelData.id
-              ? Style.selectedFillFor(root.fgColor, Color.accent) : "transparent"
-            borderSpec: Border.controlSpec("normal", root.fgColor, Color.accent)
+            Repeater {
+              model: root.visibleResults
 
-            Row {
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: resultRow.borderLeft + Style.space(8)
-              anchors.rightMargin: resultRow.borderRight + Style.space(8)
-              spacing: Style.space(8)
+              BorderSurface {
+                id: cardTile
+                required property var modelData
+                readonly property var finishData: CardModel.finishRows(cardTile.modelData)
 
-              Rectangle {
-                width: Style.space(36)
-                height: Style.space(50)
-                radius: Style.space(3)
-                color: Qt.darker(root.fgColor, 2.5)
+                width: (resultsGrid.width - resultsGrid.columnSpacing) / 2
+                height: tileContent.implicitHeight + Style.space(18)
+                radius: Style.cornerRadius
+                color: "transparent"
+                borderSpec: Border.controlSpec("normal", root.fgColor, Color.accent)
 
-                Image {
-                  anchors.centerIn: parent
-                  width: parent.width - 2
-                  height: parent.height - 2
-                  asynchronous: true
-                  fillMode: Image.PreserveAspectFit
-                  source: root.thumbFor(resultRow.modelData)
-                  visible: status === Image.Ready
+                Column {
+                  id: tileContent
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: Style.space(9)
+                  spacing: Style.space(4)
+
+                  Rectangle {
+                    width: Style.space(128)
+                    height: Style.space(179)
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    radius: Style.space(5)
+                    color: Qt.darker(root.fgColor, 2.5)
+                    clip: true
+
+                    Image {
+                      anchors.fill: parent
+                      asynchronous: true
+                      cache: true
+                      fillMode: Image.PreserveAspectFit
+                      source: root.thumbFor(cardTile.modelData)
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    text: String(cardTile.modelData.name || "Unknown card")
+                    color: root.fgColor
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    width: parent.width
+                    text: CardModel.printingLabel(cardTile.modelData)
+                    color: Qt.darker(root.fgColor, 1.3)
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                  }
+
+                  Repeater {
+                    model: cardTile.finishData.length
+
+                    Text {
+                      required property int index
+                      readonly property var finish: cardTile.finishData[index]
+                      width: tileContent.width
+                      text: String(finish.label) + "  " + root.formatPrice(finish.price)
+                      color: root.fgColor
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                      horizontalAlignment: Text.AlignHCenter
+                      elide: Text.ElideRight
+                    }
+                  }
+
+                  Button {
+                    width: parent.width
+                    text: "Check live on TCGplayer"
+                    iconText: "󰍃"
+                    leftAlign: false
+                    bordered: true
+                    foreground: root.fgColor
+                    enabled: root.tcgplayerUri(cardTile.modelData) !== ""
+                    opacity: enabled ? 1.0 : 0.45
+                    onClicked: root.openTcgplayer(cardTile.modelData)
+                  }
                 }
               }
-
-              Column {
-                id: rowText
-                width: parent.width - Style.space(44)
-                spacing: Style.space(1)
-                anchors.verticalCenter: parent.verticalCenter
-
-                Text {
-                  width: parent.width
-                  text: String(resultRow.modelData.name)
-                  color: root.fgColor
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  width: parent.width
-                  text: root.setLabel(resultRow.modelData)
-                    + "   NF " + formatPrice(priceFor(resultRow.modelData, "nonfoil"))
-                    + " · F " + formatPrice(priceFor(resultRow.modelData, "foil"))
-                  color: Qt.darker(root.fgColor, 1.3)
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-              }
-            }
-
-            MouseArea {
-              anchors.fill: parent
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.selectCard(resultRow.modelData)
             }
           }
-        }
 
-        Text {
-          visible: !root.searching && root.errorText === "" && searchField.text.trim().length >= 2 && root.resultCount === 0
-          text: "No versions found"
-          color: Qt.darker(root.fgColor, 1.3)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.body
+          Text {
+            visible: !root.searching && root.errorText === ""
+              && searchField.text.trim().length >= 2 && root.resultCount === 0
+            text: "No printings found"
+            color: Qt.darker(root.fgColor, 1.3)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
         }
-      }
       }
     }
   }

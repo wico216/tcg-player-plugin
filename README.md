@@ -2,43 +2,41 @@
 
 An [Omarchy](https://omarchy.org/) shell plugin: a **Magic: The Gathering card search bar** for your status bar.
 
-Type a card name — e.g. *one ring* — and a pane opens with every printing of the card: photo, set, collector number, and both TCGplayer market prices. Pick a version, choose **Foil** or **Non-foil**, and the pane shows that finish's TCGplayer price with a button to open it on TCGplayer.
+Click once and type a card name — e.g. *one ring*. The pane shows a large, two-column gallery of printings with the compact set code, collector number, and every available finish price. Special treatments such as surge, galaxy, textured, rainbow, and etched foil are labeled explicitly. Sort by highest price, lowest price, newest, or name, then jump directly to the live TCGplayer product page.
 
-## How prices work (no scraping needed)
+## How prices work
 
-TCGplayer has no public API, but the free [Scryfall API](https://scryfall.com/docs/api) already publishes TCGplayer retail ("market") prices per printing:
+TCGplayer has an API, but it is not granting new developer access. This plugin needs no TCGplayer credentials because the free [Scryfall API](https://scryfall.com/docs/api) already publishes TCGplayer retail ("market") prices per printing:
 
 - `prices.usd` → TCGplayer non-foil price
 - `prices.usd_foil` → TCGplayer foil price
 - `purchase_uris.tcgplayer` → deep link to the product on TCGplayer
 
-So this plugin talks only to Scryfall (one debounced, serialized request per search, honoring their rate limits) and never scrapes TCGplayer. Prices are daily snapshots, not live listings; if you ever want live per-listing prices we can add a scraper later (note: against TCGplayer ToS without permission).
+The plugin talks only to Scryfall, using debounced and serialized requests, and never scrapes TCGplayer. Prices are daily snapshots rather than live listings.
 
 ## Install
 
 ```bash
-git clone https://github.com/wico216/tcg-player-plugin.git ~/.config/omarchy/plugins/wico216.tcg-player
-omarchy-shell shell rescanPlugins
-omarchy bar put wico216.tcg-player --after omarchy.agents
+omarchy plugin add https://github.com/wico216/tcg-player-plugin.git --enable
+omarchy bar move wico216.tcg-player --after omarchy.agents
 ```
 
-Files under `~/.config/omarchy/plugins/` hot-reload on save. If a change fails to apply:
+Omarchy installs the plugin as a Git-managed checkout. Update it later with:
 
 ```bash
-omarchy-shell shell rescanPlugins
+omarchy plugin update wico216.tcg-player
 ```
 
-> Note: if you install this as a **symlink** to a git checkout (as developed), the
-> hot-reload watcher may miss edits through the link — use `omarchy restart shell`
-> to force a fresh load.
+For local development, files under `~/.config/omarchy/plugins/` hot-reload on save. If a change fails to apply, run `omarchy-shell shell rescanPlugins`.
 
 ## Use
 
-- Click the 🔍 icon in the bar (or `omarchy-shell shell wico216.tcg-player open`)
+- Click the search icon once and start typing immediately (or use `omarchy-shell wico216.tcg-player open`)
 - Type at least 2 characters; results debounce in as you type
-- Click a version row to select it
-- Toggle **Non-foil / Foil** to switch which TCGplayer price is shown
-- **Open on TCGplayer** launches the product page in your browser
+- Sort the gallery by **Highest price**, **Lowest price**, **Newest**, or **Name**
+- Price sorting uses the highest available non-foil, regular foil, special foil, or etched snapshot for each printing; unpriced printings stay last
+- Each large card tile shows every available finish with its exact treatment label and Scryfall price snapshot
+- **Check live on TCGplayer** launches that printing's current product page
 - `Esc` closes the pane
 
 ## Files
@@ -46,13 +44,29 @@ omarchy-shell shell rescanPlugins
 | File            | Purpose                                          |
 |-----------------|--------------------------------------------------|
 | `manifest.json` | Plugin contract (`bar-widget`, id `wico216.tcg-player`) |
-| `BarWidget.qml` | Bar icon + popup pane (search, results, detail)   |
+| `BarWidget.qml` | Native bar icon, focused search, and card gallery |
+| `CardModel.js`  | Visible icon contract and deterministic result sorting |
+| `tests/card-model.test.mjs` | Regression tests for the icon and sorting |
 
 ## Requirements
 
 - Omarchy with `omarchy-shell` (Quickshell) running
-- Network access to `api.scryfall.com` and `cards.scryfall.io`
+- `curl` and `xdg-open`
+- Network access to `api.scryfall.com`, `cards.scryfall.io`, and `www.tcgplayer.com`
+
+## Test
+
+```bash
+node --test tests/card-model.test.mjs
+omarchy plugin validate .
+```
+
+## Attribution and disclaimer
+
+TCG Player Search is unofficial Fan Content permitted under the Wizards of the Coast Fan Content Policy. It is not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC.
+
+This project is not affiliated with or endorsed by Scryfall or TCGplayer. Card data and images are provided at runtime by Scryfall. Magic: The Gathering, TCGplayer, Scryfall, and their respective marks and materials belong to their respective owners.
 
 ## License
 
-[MIT](LICENSE)
+The original source code in this repository is available under the [MIT License](LICENSE). The license does not grant rights to third-party names, trademarks, card data, or artwork.
