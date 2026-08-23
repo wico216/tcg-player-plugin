@@ -27,6 +27,12 @@ Omarchy installs the plugin as a Git-managed checkout. Update it later with:
 omarchy plugin update wico216.tcg-player
 ```
 
+## Remove
+
+```bash
+omarchy plugin remove wico216.tcg-player
+```
+
 For local development, files under `~/.config/omarchy/plugins/` hot-reload on save. If a change fails to apply, run `omarchy-shell shell rescanPlugins`.
 
 ## Use
