@@ -6,9 +6,6 @@
 # Logs
 *.log
 
-# Local visual diagnostics
-/.bar_*.png
-
 # Editor / OS cruft
 .DS_Store
 .idea/

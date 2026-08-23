@@ -4,6 +4,16 @@ An [Omarchy](https://omarchy.org/) shell plugin: a **Magic: The Gathering card s
 
 Click once and type a card name — e.g. *one ring*. The pane shows a large, two-column gallery of printings with the compact set code, collector number, and every available finish price. Special treatments such as surge, galaxy, textured, rainbow, and etched foil are labeled explicitly. Sort by highest price, lowest price, newest, or name, then jump directly to the live TCGplayer product page.
 
+## Screenshots
+
+![Enlarged Omarchy bar controls](preview.png)
+
+![Full-width Omarchy bar](docs/screenshots/full-bar.png)
+
+![Omarchy bar controls](docs/screenshots/bar-controls.png)
+
+![Search control detail](docs/screenshots/search-control.png)
+
 ## How prices work
 
 TCGplayer has an API, but it is not granting new developer access. This plugin needs no TCGplayer credentials because the free [Scryfall API](https://scryfall.com/docs/api) already publishes TCGplayer retail ("market") prices per printing:
