@@ -6,6 +6,10 @@ Click once and type a card name — e.g. *one ring*. The pane shows a large, two
 
 ## Screenshots
 
+![Open Magic card search](docs/screenshots/search-panel.png)
+
+![Magic card search results for The One Ring](docs/screenshots/search-results.png)
+
 ![Enlarged Omarchy bar controls](preview.png)
 
 ![Full-width Omarchy bar](docs/screenshots/full-bar.png)
@@ -67,7 +71,7 @@ For local development, files under `~/.config/omarchy/plugins/` hot-reload on sa
 ## Requirements
 
 - Omarchy with `omarchy-shell` (Quickshell) running
-- `curl` and `xdg-open`
+- `curl` 8.20 or newer and `xdg-open`
 - Network access to `api.scryfall.com`, `cards.scryfall.io`, and `www.tcgplayer.com`
 
 ## Test

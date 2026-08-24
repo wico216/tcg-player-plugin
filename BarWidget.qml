@@ -65,22 +65,23 @@ BarWidget {
 
   function applySearch(payload, requestQuery) {
     var plan = CardModel.searchResponsePlan(requestQuery, root.pendingQuery, searchField.text)
-    if (!payload || payload.object === "error") {
+    var safePayload = CardModel.sanitizeSearchPayload(payload)
+    if (safePayload.object === "error") {
       if (!plan.apply) return
       root.results = []
       root.totalCards = 0
-      root.errorText = payload && payload.details ? payload.details : "Search failed"
+      root.errorText = safePayload.details
       return
     }
 
     if (plan.cacheKey !== "") {
       if (Object.keys(root.searchCache).length > 60) root.searchCache = {}
-      root.searchCache[plan.cacheKey] = payload
+      root.searchCache[plan.cacheKey] = safePayload
     }
     if (!plan.apply) return
 
     root.errorText = ""
-    root.results = CardModel.filterCardsByName(payload.data, requestQuery)
+    root.results = CardModel.filterCardsByName(safePayload.data, requestQuery)
     root.totalCards = root.results.length
     Qt.callLater(root.resetResultsViewport)
   }
@@ -91,15 +92,17 @@ BarWidget {
 
   function thumbFor(card) {
     if (!card) return ""
-    if (card.image_uris && card.image_uris.small) return card.image_uris.small
+    if (card.image_uris && card.image_uris.small)
+      return CardModel.safeScryfallImageUrl(card.image_uris.small)
     if (card.card_faces && card.card_faces.length > 0
-        && card.card_faces[0].image_uris) return card.card_faces[0].image_uris.small || ""
+        && card.card_faces[0].image_uris)
+      return CardModel.safeScryfallImageUrl(card.card_faces[0].image_uris.small || "")
     return ""
   }
 
   function tcgplayerUri(card) {
     return card && card.purchase_uris && card.purchase_uris.tcgplayer
-      ? String(card.purchase_uris.tcgplayer) : ""
+      ? CardModel.safeTcgplayerUrl(card.purchase_uris.tcgplayer) : ""
   }
 
   function openTcgplayer(card) {
@@ -163,26 +166,22 @@ BarWidget {
     property string activeQuery: ""
 
     stdout: StdioCollector {
+      id: searchOutput
       waitForEnd: true
-      onStreamFinished: {
-        var plan = CardModel.searchResponsePlan(searchProc.activeQuery, root.pendingQuery, searchField.text)
-        try {
-          root.applySearch(JSON.parse(String(text || "{}")), searchProc.activeQuery)
-        } catch (error) {
-          root.applySearch({ object: "error", details: "Could not reach Scryfall" }, searchProc.activeQuery)
-        }
-        if (plan.fetchPending) startSearchTimer.restart()
-        else root.searching = false
-      }
     }
 
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var plan = CardModel.searchResponsePlan(searchProc.activeQuery, root.pendingQuery, searchField.text)
-        if (text.trim() !== "" && plan.apply && root.resultCount === 0)
-          root.errorText = "Scryfall unreachable"
-      }
+    stderr: SplitParser {
+      onRead: function(_line) {}
+    }
+
+    onExited: function(exitCode) {
+      var plan = CardModel.searchResponsePlan(searchProc.activeQuery, root.pendingQuery, searchField.text)
+      root.applySearch(
+        CardModel.searchProcessPayload(exitCode, searchOutput.text),
+        searchProc.activeQuery
+      )
+      if (plan.fetchPending) startSearchTimer.restart()
+      else root.searching = false
     }
   }
 
@@ -207,7 +206,7 @@ BarWidget {
     function toggle(): void { root.togglePanel() }
     function query(): string { return searchField.text }
     function search(query: string): string {
-      searchField.text = String(query)
+      searchField.text = CardModel.boundedQuery(query)
       root.open()
       root.requestSearch()
       return "ok"
@@ -278,6 +277,7 @@ BarWidget {
           TextField {
             id: searchField
             width: parent.width
+            maximumLength: 120
             placeholderText: "Search Magic cards… (e.g. one ring)"
             foreground: root.fgColor
             font.family: root.fontFamily
@@ -357,6 +357,7 @@ BarWidget {
           Text {
             visible: !root.searching && root.errorText !== ""
             text: root.errorText
+            textFormat: Text.PlainText
             color: Qt.darker(root.fgColor, 1.3)
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -425,6 +426,7 @@ BarWidget {
                   Text {
                     width: parent.width
                     text: String(cardTile.modelData.name || "Unknown card")
+                    textFormat: Text.PlainText
                     color: root.fgColor
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -438,6 +440,7 @@ BarWidget {
                   Text {
                     width: parent.width
                     text: CardModel.printingLabel(cardTile.modelData)
+                    textFormat: Text.PlainText
                     color: Qt.darker(root.fgColor, 1.3)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -453,6 +456,7 @@ BarWidget {
                       readonly property var finish: cardTile.finishData[index]
                       width: tileContent.width
                       text: String(finish.label) + "  " + root.formatPrice(finish.price)
+                      textFormat: Text.PlainText
                       color: root.fgColor
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall

@@ -195,19 +195,177 @@ test("searchQuery builds punctuation-tolerant name-only terms", () => {
   assert.equal(CardModel.searchQuery('jace "the mind sculptor"'), "name:jace name:the name:mind name:sculptor")
 })
 
-test("scryfallSearchCommand sends required headers and an encoded name-only query", () => {
+test("boundedQuery caps user and IPC input before it reaches curl", () => {
+  assert.equal(CardModel.boundedQuery("x".repeat(121)), "x".repeat(120))
+  assert.equal(CardModel.boundedQuery(null), "")
+})
+
+test("scryfallSearchCommand bounds the transfer and permits HTTPS only", () => {
   assert.deepEqual(CardModel.scryfallSearchCommand("Æther Vial"), [
     "curl",
     "-sS",
     "--compressed",
     "--max-time",
     "8",
+    "--max-filesize",
+    "2M",
+    "--proto",
+    "=https",
     "-A",
-    "wico216-tcg-player-plugin/0.2 (omarchy shell plugin)",
+    "wico216-tcg-player-plugin/0.2.1 (omarchy shell plugin)",
     "-H",
-    "Accept: application/json;q=0.9,*/*;q=0.8",
+    "Accept: application/json",
     "https://api.scryfall.com/cards/search?unique=prints&order=name&dir=asc&q=name%3Aaether%20name%3Avial"
   ])
+})
+
+test("safeScryfallImageUrl accepts only credential-free HTTPS cards.scryfall.io URLs", () => {
+  const valid = "https://cards.scryfall.io/small/front/a/b/abcdef.jpg?123"
+  assert.equal(CardModel.safeScryfallImageUrl(valid), valid)
+
+  const rejected = [
+    "http://cards.scryfall.io/small/card.jpg",
+    "file:///etc/passwd",
+    "data:image/png;base64,AAAA",
+    "https://cards.scryfall.io.evil.example/card.jpg",
+    "https://attacker.example/cards.scryfall.io/card.jpg",
+    "https://user@cards.scryfall.io/card.jpg",
+    "https://cards.scryfall.io:444/card.jpg"
+  ]
+  for (const candidate of rejected) assert.equal(CardModel.safeScryfallImageUrl(candidate), "")
+})
+
+test("decodedQueryParameter decodes a nested URL exactly once without URLSearchParams", () => {
+  const partner = "https://partner.tcgplayer.com/c/4931599/1830156/21018?subId1=api&u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F487805%3Fpage%3D1"
+  assert.equal(
+    CardModel.decodedQueryParameter(partner, "u"),
+    "https://www.tcgplayer.com/product/487805?page=1"
+  )
+  assert.equal(CardModel.decodedQueryParameter(partner, "missing"), "")
+  assert.equal(CardModel.decodedQueryParameter("https://example.com/?u=%ZZ", "u"), "")
+})
+
+test("safeTcgplayerUrl accepts exact TCGplayer product and validated partner URLs", () => {
+  const validProduct = "https://www.tcgplayer.com/product/282800/the-one-ring?Language=English"
+  const validPartner = "https://partner.tcgplayer.com/c/4931599/1830156/21018?subId1=api&u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F487805%3Fpage%3D1"
+  assert.equal(CardModel.safeTcgplayerUrl(validProduct), validProduct)
+  assert.equal(CardModel.safeTcgplayerUrl(validPartner), validPartner)
+
+  const rejected = [
+    "http://www.tcgplayer.com/product/282800",
+    "https://tcgplayer.com/product/282800",
+    "https://www.tcgplayer.com.evil.example/product/282800",
+    "https://user@www.tcgplayer.com/product/282800",
+    "https://www.tcgplayer.com:444/product/282800",
+    "https://www.tcgplayer.com/search/all/product?q=ring",
+    "https://partner.tcgplayer.com/c/4931599/1830156/21018",
+    "https://partner.tcgplayer.com/c/4931599/1830156/21018?u=https%3A%2F%2Fevil.example%2Fproduct%2F1",
+    "https://partner.tcgplayer.com/c/4931599/1830156/21018?u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F1&%75=https%3A%2F%2Fevil.example%2Fproduct%2F1",
+    "https://partner.tcgplayer.com.evil.example/c/4931599?u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F1",
+    "javascript:alert(1)",
+    "file:///tmp/card"
+  ]
+  for (const candidate of rejected) assert.equal(CardModel.safeTcgplayerUrl(candidate), "")
+})
+
+test("safeTcgplayerUrl rejects a duplicate destination after many padding parameters", () => {
+  const padding = Array.from({ length: 31 }, (_, index) => `p${index}=x`).join("&")
+  const candidate = "https://partner.tcgplayer.com/c/4931599/1830156/21018?"
+    + padding
+    + "&u=https%3A%2F%2Fwww.tcgplayer.com%2Fproduct%2F1"
+    + "&%75=https%3A%2F%2Fevil.example%2Fproduct%2F1"
+
+  assert.equal(CardModel.safeTcgplayerUrl(candidate), "")
+})
+
+test("sanitizeSearchPayload caps cards and retains only display fields", () => {
+  const rawCards = Array.from({ length: 180 }, (_, index) => ({
+    ...card({
+      id: String(index),
+      name: `Card ${index}`,
+      releasedAt: "2026-08-23",
+      usd: "12.34",
+      setCode: "tst",
+      collectorNumber: String(index)
+    }),
+    oracle_text: "This field must not be retained.",
+    purchase_uris: { tcgplayer: `https://www.tcgplayer.com/product/${1000 + index}` }
+  }))
+
+  const sanitized = CardModel.sanitizeSearchPayload({ object: "list", data: rawCards })
+
+  assert.equal(sanitized.data.length, 175)
+  assert.deepEqual(sanitized.data[0], {
+    name: "Card 0",
+    set: "tst",
+    collector_number: "0",
+    released_at: "2026-08-23",
+    finishes: ["nonfoil", "foil"],
+    promo_types: [],
+    prices: { usd: "12.34", usd_foil: null, usd_etched: null },
+    image_uris: { small: "https://cards.scryfall.io/small/0.jpg" },
+    purchase_uris: { tcgplayer: "https://www.tcgplayer.com/product/1000" }
+  })
+  assert.equal("oracle_text" in sanitized.data[0], false)
+})
+
+test("sanitizeSearchPayload bounds remote fields and rejects invalid prices and URLs", () => {
+  const raw = card({ id: "bounded", name: "N".repeat(300), releasedAt: "2026-08-23-extra" })
+  raw.set = "s".repeat(40)
+  raw.collector_number = "c".repeat(100)
+  raw.finishes = ["nonfoil", "foil", "etched", "invalid"]
+  raw.promo_types = Array.from({ length: 20 }, (_, index) => `treatment${index}`.repeat(5))
+  raw.prices = { usd: "9".repeat(100), usd_foil: "12.34", usd_etched: "not-a-price" }
+  raw.image_uris.small = "file:///etc/passwd"
+  raw.purchase_uris.tcgplayer = "javascript:alert(1)"
+
+  const sanitized = CardModel.sanitizeSearchPayload({ object: "list", data: [raw] }).data[0]
+
+  assert.equal(sanitized.name.length, 200)
+  assert.equal(sanitized.set.length, 16)
+  assert.equal(sanitized.collector_number.length, 64)
+  assert.equal(sanitized.released_at, "2026-08-23")
+  assert.deepEqual(sanitized.finishes, ["nonfoil", "foil", "etched"])
+  assert.equal(sanitized.promo_types.length, 16)
+  assert.equal(sanitized.promo_types.every(value => value.length <= 32), true)
+  assert.deepEqual(sanitized.prices, { usd: null, usd_foil: "12.34", usd_etched: null })
+  assert.equal(sanitized.image_uris.small, "")
+  assert.equal(sanitized.purchase_uris.tcgplayer, "")
+})
+
+test("sanitizeSearchPayload converts malformed responses into bounded errors", () => {
+  assert.deepEqual(
+    CardModel.sanitizeSearchPayload({ object: "error", details: "E".repeat(300) }),
+    { object: "error", details: "E".repeat(240) }
+  )
+  assert.deepEqual(
+    CardModel.sanitizeSearchPayload({ object: "list", data: "not-an-array" }),
+    { object: "error", details: "Invalid Scryfall response" }
+  )
+})
+
+test("searchProcessPayload rejects failed and malformed curl output before use", () => {
+  assert.deepEqual(
+    CardModel.searchProcessPayload(63, '{"object":"list","data":['),
+    { object: "error", details: "Scryfall unreachable" }
+  )
+  assert.deepEqual(
+    CardModel.searchProcessPayload(0, "not json"),
+    { object: "error", details: "Could not read Scryfall response" }
+  )
+})
+
+test("searchProcessPayload returns a sanitized successful response", () => {
+  const raw = card({ id: "process", name: "Process Card", releasedAt: "2026-08-23", usd: "4.25" })
+  raw.purchase_uris.tcgplayer = "https://www.tcgplayer.com/product/12345"
+  raw.oracle_text = "must be dropped"
+
+  const payload = CardModel.searchProcessPayload(0, JSON.stringify({ object: "list", data: [raw] }))
+
+  assert.equal(payload.object, "list")
+  assert.equal(payload.data.length, 1)
+  assert.equal(payload.data[0].name, "Process Card")
+  assert.equal("oracle_text" in payload.data[0], false)
 })
 
 test("filterCardsByName matches omitted punctuation without admitting oracle-text hits", () => {
