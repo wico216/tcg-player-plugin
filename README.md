@@ -10,7 +10,7 @@ Click once and type a card name — e.g. *one ring*. The pane shows a large, two
 
 ![Magic card search results for The One Ring](docs/screenshots/search-results.png)
 
-![Enlarged Omarchy bar controls](preview.png)
+![TCG Player Search showing Magic card printings and prices](preview.png)
 
 ![Full-width Omarchy bar](docs/screenshots/full-bar.png)
 
